@@ -89,7 +89,7 @@ type headerSuppressorResponseWriter struct {
 func (w *headerSuppressorResponseWriter) WriteHeader(code int) {}
 
 // CreateFileHandler returns an http handler to locate files on disk
-func CreateFileHandler(servingPath, manifest string, pkgs []string, base string) http.HandlerFunc {
+func CreateFileHandler(servingPath, manifest string, pkgs []string, base string, index_html string) http.HandlerFunc {
 	pkgPaths := chainedDir{}
 	for _, pkg := range pkgs {
 		path := filepath.Join(base, pkg)
@@ -120,14 +120,14 @@ func CreateFileHandler(servingPath, manifest string, pkgs []string, base string)
 		// search through pkgs for the first index.html file found if any exists
 		for _, pkg := range pkgs {
 			// defaultIndex is not cached, so that a user's edits will be reflected.
-			defaultIndex := filepath.Join(base, pkg, "index.html")
+			defaultIndex := filepath.Join(base, pkg, index_html)
 			if _, err := os.Stat(defaultIndex); err == nil {
 				http.ServeFile(w, r, defaultIndex)
 				return
 			}
 		}
 		content := bytes.NewReader(defaultPage)
-		http.ServeContent(w, r, "index.html", time.Now(), content)
+		http.ServeContent(w, r, index_html, time.Now(), content)
 	}
 
 	// Serve a custom index.html so as to override the default directory listing

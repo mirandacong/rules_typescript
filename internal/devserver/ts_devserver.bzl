@@ -95,6 +95,7 @@ RUNFILES="$PWD/.."
   -scripts_manifest={workspace}/{scripts_manifest} \
   -entry_module={entry_module} \
   -port={port} \
+  -index_html={index_html} \
   "$@"
 """.format(
             main = ctx.executable._devserver.short_path,
@@ -105,6 +106,7 @@ RUNFILES="$PWD/.."
             scripts_manifest = ctx.outputs.scripts_manifest.short_path,
             entry_module = ctx.attr.entry_module,
             port = str(ctx.attr.port),
+            index_html = ctx.attr.index_html,
         ),
     )
     return [DefaultInfo(
@@ -118,6 +120,12 @@ RUNFILES="$PWD/.."
         ),
     )]
 
+# This ts_devserver is more flexible than the 0.16.2 version, add an attribute
+# named index_html, There are following methods to use this attribute
+#       1.  Use it in the ts_devserver, add an `index_html` in the rule of
+#           `ts_devserver`
+#       2.  Use it in the bash script, add an `-index_html` in the script of golang
+#           which build the rule of `ts_devserver`
 ts_devserver = rule(
     implementation = _ts_devserver,
     attrs = {
@@ -161,6 +169,10 @@ ts_devserver = rule(
         "port": attr.int(
             doc = """The port that the devserver will listen on.""",
             default = 5432,
+        ),
+        "index_html": attr.string(
+            doc = """The index file of devserver.""",
+            default = 'index.html'
         ),
         "_requirejs_script": attr.label(allow_single_file = True, default = Label("@build_bazel_rules_typescript_devserver_deps//:node_modules/requirejs/require.js")),
         "_devserver": attr.label(
