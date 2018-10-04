@@ -89,7 +89,7 @@ type headerSuppressorResponseWriter struct {
 func (w *headerSuppressorResponseWriter) WriteHeader(code int) {}
 
 // CreateFileHandler returns an http handler to locate files on disk
-func CreateFileHandler(servingPath, manifest string, pkgs []string, base string) http.HandlerFunc {
+func CreateFileHandler(servingPath, manifest string, pkgs []string, base string, entrypoint string) http.HandlerFunc {
 	pkgPaths := chainedDir{}
 	for _, pkg := range pkgs {
 		path := filepath.Join(base, pkg)
@@ -97,9 +97,9 @@ func CreateFileHandler(servingPath, manifest string, pkgs []string, base string)
 			fmt.Fprintf(os.Stderr, "Cannot read server root package at %s: %v\n", path, err)
 			os.Exit(1)
 		}
-		pkgPaths = append(pkgPaths, http.Dir(path))
+		pkgPaths = append(pkgPaths, http.Dir(path), entrypoint)
 	}
-	pkgPaths = append(pkgPaths, http.Dir(base))
+	pkgPaths = append(pkgPaths, http.Dir(base), entrypoint)
 
 	fileHandler := http.FileServer(pkgPaths).ServeHTTP
 
@@ -120,14 +120,14 @@ func CreateFileHandler(servingPath, manifest string, pkgs []string, base string)
 		// search through pkgs for the first index.html file found if any exists
 		for _, pkg := range pkgs {
 			// defaultIndex is not cached, so that a user's edits will be reflected.
-			defaultIndex := filepath.Join(base, pkg, "index.html")
+			defaultIndex := filepath.Join(base, pkg, entrypoint)
 			if _, err := os.Stat(defaultIndex); err == nil {
 				http.ServeFile(w, r, defaultIndex)
 				return
 			}
 		}
 		content := bytes.NewReader(defaultPage)
-		http.ServeContent(w, r, "index.html", time.Now(), content)
+		http.ServeContent(w, r, entrypoint, time.Now(), content)
 	}
 
 	// Serve a custom index.html so as to override the default directory listing
@@ -166,7 +166,7 @@ func CreateFileHandler(servingPath, manifest string, pkgs []string, base string)
 // chainedDir implements http.FileSystem by looking in the list of dirs one after each other.
 type chainedDir []http.Dir
 
-func (chain chainedDir) Open(name string) (http.File, error) {
+func (chain chainedDir) Open(name string) (http.File, error) (entrypoint string) {
 	for _, dir := range chain {
 		f, err := dir.Open(name)
 		if os.IsNotExist(err) {
@@ -188,7 +188,7 @@ func (chain chainedDir) Open(name string) (http.File, error) {
 		if stat.IsDir() {
 			// Make sure to close the previous file handle before moving to a different file.
 			f.Close()
-			indexName := filepath.Join(name, "index.html")
+			indexName := filepath.Join(name, entrypoint)
 			f, err := dir.Open(indexName)
 			if os.IsNotExist(err) {
 				continue

@@ -95,6 +95,7 @@ RUNFILES="$PWD/.."
   -scripts_manifest={workspace}/{scripts_manifest} \
   -entry_module={entry_module} \
   -port={port} \
+  -entrypoint={entrypoint} \
   "$@"
 """.format(
             main = ctx.executable._devserver.short_path,
@@ -105,6 +106,7 @@ RUNFILES="$PWD/.."
             scripts_manifest = ctx.outputs.scripts_manifest.short_path,
             entry_module = ctx.attr.entry_module,
             port = str(ctx.attr.port),
+            entrypoint = ctx.attr.entrypoint,
         ),
     )
     return [DefaultInfo(
@@ -161,6 +163,10 @@ ts_devserver = rule(
         "port": attr.int(
             doc = """The port that the devserver will listen on.""",
             default = 5432,
+        ),
+        "entrypoint": attr.string(
+            doc = """The entrypoint file of devserver.""",
+            default = 'index.html'
         ),
         "_requirejs_script": attr.label(allow_single_file = True, default = Label("@build_bazel_rules_typescript_devserver_deps//:node_modules/requirejs/require.js")),
         "_devserver": attr.label(

@@ -23,6 +23,7 @@ var (
 	scriptsManifest = flag.String("scripts_manifest", "", "preScripts manifest (.MF)")
 	servingPath     = flag.String("serving_path", "/_/ts_scripts.js", "path to serve the combined sources at")
 	entryModule     = flag.String("entry_module", "", "entry module name")
+	entrypoint		= flag.String("entrypoint", "index.html", "entrypoint of devserver")
 )
 
 func main() {
@@ -92,7 +93,7 @@ func main() {
 
 	http.Handle(*servingPath, concatjs.ServeConcatenatedJS(*manifest, *base, preScripts, postScripts, nil /* realFileSystem */))
 	pkgList := strings.Split(*pkgs, ",")
-	http.HandleFunc("/", devserver.CreateFileHandler(*servingPath, *manifest, pkgList, *base))
+	http.HandleFunc("/", devserver.CreateFileHandler(*servingPath, *manifest, pkgList, *base, *entrypoint))
 
 	h, err := os.Hostname()
 	if err != nil {
