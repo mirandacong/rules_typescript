@@ -38,7 +38,10 @@ def rules_typescript_dependencies():
     _maybe(
         http_archive,
         name = "build_bazel_rules_nodejs",
-        urls = ["https://github.com/bazelbuild/rules_nodejs/archive/0.11.5.zip"],
+        urls = [
+            "http://mirrors.corp.logiocean.com/file-store/rules_nodejs/0.11.3.zip",
+            "https://github.com/bazelbuild/rules_nodejs/archive/0.11.5.zip"
+        ],
         strip_prefix = "rules_nodejs-0.11.5",
         sha256 = "985bf908faa72cc4638c356a99d19ccac223e5dcd8dae695e3157e5c00f53489",
     )
@@ -47,7 +50,10 @@ def rules_typescript_dependencies():
     _maybe(
         http_archive,
         name = "io_bazel_rules_webtesting",
-        urls = ["https://github.com/bazelbuild/rules_webtesting/archive/0.2.1.zip"],
+        urls = [
+            "http://mirrors.corp.logiocean.com/file-store/rules_webtesting/0.2.1.zip",
+            "https://github.com/bazelbuild/rules_webtesting/archive/0.2.1.zip"
+        ],
         strip_prefix = "rules_webtesting-0.2.1",
         sha256 = "7d490aadff9b5262e5251fa69427ab2ffd1548422467cb9f9e1d110e2c36f0fa",
     )
@@ -57,7 +63,10 @@ def rules_typescript_dependencies():
     _maybe(
         http_archive,
         name = "io_bazel_rules_go",
-        urls = ["https://github.com/bazelbuild/rules_go/releases/download/0.13.0/rules_go-0.13.0.tar.gz"],
+        urls = [
+            "http://mirrors.corp.logiocean.com/file-store/rules_go/rules_go-0.13.0.tar.gz",
+            "https://github.com/bazelbuild/rules_go/releases/download/0.13.0/rules_go-0.13.0.tar.gz"
+        ],
         sha256 = "ba79c532ac400cefd1859cbc8a9829346aa69e3b99482cd5a54432092cbc3933",
     )
 
@@ -65,7 +74,10 @@ def rules_typescript_dependencies():
     _maybe(
         http_archive,
         name = "bazel_gazelle",
-        urls = ["https://github.com/bazelbuild/bazel-gazelle/releases/download/0.13.0/bazel-gazelle-0.13.0.tar.gz"],
+        urls = [
+            "http://mirrors.corp.logiocean.com/file-store/bazel-gazelle/bazel-gazelle-0.13.0.tar.gz",
+            "https://github.com/bazelbuild/bazel-gazelle/releases/download/0.13.0/bazel-gazelle-0.13.0.tar.gz"
+        ],
         sha256 = "bc653d3e058964a5a26dcad02b6c72d7d63e6bb88d94704990b908a1445b8758",
     )
 
@@ -77,7 +89,10 @@ def rules_typescript_dependencies():
     _maybe(
         http_archive,
         name = "bazel_skylib",
-        url = "https://github.com/bazelbuild/bazel-skylib/archive/0.3.1.zip",
+        urls = [
+            "http://mirrors.corp.logiocean.com/file-store/bazel-skylib/0.3.1.zip",
+            "https://github.com/bazelbuild/bazel-skylib/archive/0.3.1.zip",
+        ]
         strip_prefix = "bazel-skylib-0.3.1",
         sha256 = "95518adafc9a2b656667bbf517a952e54ce7f350779d0dd95133db4eb5c27fb1",
     )
@@ -97,7 +112,10 @@ def rules_typescript_dev_dependencies():
 
     http_archive(
         name = "com_github_bazelbuild_buildtools",
-        url = "https://github.com/bazelbuild/buildtools/archive/0.12.0.zip",
+        urls = [
+            "http://mirrors.corp.logiocean.com/file-store/buildtools/0.12.0.zip",
+            "https://github.com/bazelbuild/buildtools/archive/0.12.0.zip",
+        ],
         strip_prefix = "buildtools-0.12.0",
         sha256 = "ec495cbd19238c9dc488fd65ca1fee56dcb1a8d6d56ee69a49f2ebe69826c261",
     )
@@ -108,14 +126,20 @@ def rules_typescript_dev_dependencies():
 
     http_archive(
         name = "io_bazel_rules_sass",
-        urls = ["https://github.com/bazelbuild/rules_sass/archive/0.0.3.zip"],
+        urls = [
+            "http://mirrors.corp.logiocean.com/file-store/rules_sass/0.0.3.zip",
+            "https://github.com/bazelbuild/rules_sass/archive/0.0.3.zip"
+        ],
         strip_prefix = "rules_sass-0.0.3",
         sha256 = "8fa98e7b48a5837c286a1ea254b5a5c592fced819ee9fe4fdd759768d97be868",
     )
 
     http_archive(
         name = "io_bazel_skydoc",
-        urls = ["https://github.com/bazelbuild/skydoc/archive/0ef7695c9d70084946a3e99b89ad5a99ede79580.zip"],
+        urls = [
+            "http://mirrors.corp.logiocean.com/file-store/skydoc/0ef7695c9d70084946a3e99b89ad5a99ede79580.zip",
+            "https://github.com/bazelbuild/skydoc/archive/0ef7695c9d70084946a3e99b89ad5a99ede79580.zip"
+        ],
         strip_prefix = "skydoc-0ef7695c9d70084946a3e99b89ad5a99ede79580",
         sha256 = "491f9e142b870b18a0ec8eb3d66636eeceabe5f0c73025706c86f91a1a2acb4d",
     )
