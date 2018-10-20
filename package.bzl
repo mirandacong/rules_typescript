@@ -39,7 +39,7 @@ def rules_typescript_dependencies():
         http_archive,
         name = "build_bazel_rules_nodejs",
         urls = [
-            "http://mirrors.corp.logiocean.com/file-store/rules_nodejs/0.11.3.zip",
+            "http://mirrors.corp.logiocean.com/file-store/rules_nodejs/taobao-registry-0.11.5.zip",
             "https://github.com/bazelbuild/rules_nodejs/archive/0.11.5.zip"
         ],
         strip_prefix = "rules_nodejs-0.11.5",
