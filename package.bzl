@@ -92,7 +92,7 @@ def rules_typescript_dependencies():
         urls = [
             "http://mirrors.corp.logiocean.com/file-store/bazel-skylib/0.3.1.zip",
             "https://github.com/bazelbuild/bazel-skylib/archive/0.3.1.zip",
-        ]
+        ],
         strip_prefix = "bazel-skylib-0.3.1",
         sha256 = "95518adafc9a2b656667bbf517a952e54ce7f350779d0dd95133db4eb5c27fb1",
     )
