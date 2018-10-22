@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"flag"
@@ -21,16 +21,12 @@ import (
 	"github.com/bazelbuild/rules_typescript/ts_auto_deps/platform"
 	"github.com/bazelbuild/rules_typescript/ts_auto_deps/workspace"
 	"github.com/golang/protobuf/proto"
+	"github.com/mattn/go-isatty"
 
 	arpb "github.com/bazelbuild/rules_typescript/ts_auto_deps/proto"
 )
 
-var (
-	namespaceLookupTable = flag.String(
-		"namespace_lookup_table",
-		"/google/data/ro/teams/typescript/ts_auto_deps-namespaces-targets",
-		"sstable mapping JavaScript namespaces to bazel targets")
-)
+var bazelErrorRE = regexp.MustCompile(`ERROR: ([^:]+):(\d+):\d+:`)
 
 // New creates a new updater from the given arguments. One updater can be used
 // to update many packages, repeatedly, but not concurrently.
@@ -80,6 +76,19 @@ func attrTruthy(r *build.Rule, attr string) bool {
 var unusedDeclarationRE = regexp.MustCompile(
 	`WARNING: [^:]+:\d+:\d+: keeping possibly used ts_declaration '([^']+)'`)
 
+// GarbledBazelResponseError signals to callers that the proto returned by bazel
+// analyze was garbled, and couldn't be unmarshalled.
+// TODO(lucassloan): remove when b/112891536 is fixed
+// Build Rabbit rewrites paths produced by bazel, which garbles the error
+// messages from bazel analyze, since they're encoded in protobufs.
+type GarbledBazelResponseError struct {
+	Message string
+}
+
+func (g *GarbledBazelResponseError) Error() string {
+	return g.Message
+}
+
 // runBazelAnalyze executes the `bazel analyze` command and extracts reports.
 // It returns the dependency report with rule names referring to rules *before*
 // macro expansion, or an error. runBazelAnalyze uses the given `analyze`
@@ -96,12 +105,22 @@ func (upd *Updater) runBazelAnalyze(buildFilePath string, bld *build.File, rules
 	args = append(args, targets...)
 	out, stderr, err := upd.bazelAnalyze(buildFilePath, args)
 	if err != nil {
-		return nil, &AnalysisFailedError{fmt.Sprintf("running bazel analyze %s failed: %v", args, err), buildFilePath}
+		return nil, &AnalysisFailedError{
+			[]AnalysisFailureCause{
+				AnalysisFailureCause{
+					Message: fmt.Sprintf("running bazel analyze %s failed: %v", args, err),
+					Path:    bld.Path,
+				},
+			},
+		}
 	}
 
 	var res arpb.AnalyzeResult
 	if err := proto.Unmarshal(out, &res); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal analysis result: %v\nin: %s", err, string(out))
+		// TODO(lucassloan): remove when b/112891536 is fixed
+		// Build Rabbit rewrites paths produced by bazel, which garbles the error
+		// messages from bazel analyze, since they're encoded in protobufs.
+		return nil, &GarbledBazelResponseError{fmt.Sprintf("failed to unmarshal analysis result: %v\nin: %s", err, string(out))}
 	}
 	platform.Infof("analyze result %v", res)
 	reports := res.GetDependencyReport()
@@ -137,7 +156,8 @@ func (upd *Updater) runBazelAnalyze(buildFilePath string, bld *build.File, rules
 
 func spin(prefix string) chan<- struct{} {
 	done := make(chan struct{})
-	if !isatty(int(os.Stderr.Fd())) {
+	// Check for cygwin, important for Windows compatibility
+	if !isatty.IsTerminal(os.Stderr.Fd()) || !isatty.IsCygwinTerminal(os.Stdout.Fd()) {
 		return done
 	}
 	go func() {
@@ -165,16 +185,6 @@ func spin(prefix string) chan<- struct{} {
 	return done
 }
 
-// isatty reports whether fd is a tty.
-func isatty(fd int) bool {
-	var st syscall.Stat_t
-	err := syscall.Fstat(fd, &st)
-	if err != nil {
-		return false
-	}
-	return st.Mode&syscall.S_IFMT == syscall.S_IFCHR
-}
-
 // readBUILD loads the BUILD file, if present, or returns a new empty one.
 // workspaceRoot must be an absolute path and buildFilePath is interpreted as
 // relative to CWD, and must be underneath workspaceRoot.
@@ -185,17 +195,18 @@ func readBUILD(ctx context.Context, workspaceRoot, buildFilePath string) (*build
 		return nil, err
 	}
 	g3Path, err := filepath.Rel(workspaceRoot, absPath)
+	normalizedG3Path := platform.Normalize(g3Path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve workspace relative path: %s", err)
 	}
 	data, err := platform.ReadFile(ctx, buildFilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &build.File{Path: g3Path, Build: true}, nil
+			return &build.File{Path: normalizedG3Path, Build: true}, nil
 		}
 		return nil, fmt.Errorf("reading %q: %s", buildFilePath, err)
 	}
-	return build.ParseBuild(g3Path, data)
+	return build.ParseBuild(normalizedG3Path, data)
 }
 
 type srcSet map[string]bool
@@ -298,31 +309,61 @@ func determineRuleType(path, s string) ruleType {
 // AnalysisFailedError is returned by ts_auto_deps when the underlying analyze operation
 // fails, e.g. because the BUILD files have syntactical errors.
 type AnalysisFailedError struct {
+	Causes []AnalysisFailureCause
+}
+
+// AnalysisFailureCause gives (one of) the reasons analysis failed, along with
+// the path and line that caused the failure (if available).
+type AnalysisFailureCause struct {
 	Message string
-	// workspace path of the file on which analysis failed
+	// workspace path of the file on which analysis failed ie foo/bar/baz.ts, not
+	// starting with google3/
 	Path string
+	// 1-based line on which analysis failed
+	Line int
 }
 
 func (a *AnalysisFailedError) Error() string {
-	return a.Message
+	var messages []string
+	for _, c := range a.Causes {
+		messages = append(messages, c.Message)
+	}
+	return strings.Join(messages, "\n")
 }
 
 // updateDeps adds missing dependencies and removes unnecessary dependencies
 // for the targets in the given DependencyReports to the build rules in bld.
 // Returns true if it changed anything in the build file.
-func updateDeps(bld *build.File, reports []*arpb.DependencyReport) (bool, error) {
+func updateDeps(bld *build.File, errorOnUnresolvedImports bool, reports []*arpb.DependencyReport) (bool, error) {
 	// First, check *all* reports on whether they were successful, so that users
 	// get the complete set of errors at once.
-	var errors []string
+	var errors []AnalysisFailureCause
 	for _, report := range reports {
 		if !report.GetSuccessful() {
-			msg := fmt.Sprintf("dependency analysis failed for %s:\n%s",
-				report.GetRule(), strings.Join(report.GetFeedback(), "\n"))
-			errors = append(errors, msg)
+			for _, fb := range report.GetFeedback() {
+				msg := fmt.Sprintf("dependency analysis failed for %s:\n%s",
+					report.GetRule(), fb)
+
+				m := bazelErrorRE.FindStringSubmatch(fb)
+				if m == nil {
+					// error message didn't contain file and line number, so just use the
+					// path of the BUILD file that was analyzed
+					errors = append(errors, AnalysisFailureCause{Message: msg, Path: bld.Path})
+					continue
+				}
+
+				file := m[1]
+				line, err := strconv.Atoi(m[2])
+				if err != nil {
+					return false, err
+				}
+
+				errors = append(errors, AnalysisFailureCause{msg, file, line})
+			}
 		}
 	}
 	if len(errors) > 0 {
-		return false, &AnalysisFailedError{strings.Join(errors, "\n"), bld.Path}
+		return false, &AnalysisFailedError{errors}
 	}
 
 	pkg := filepath.Dir(bld.Path)
@@ -340,9 +381,15 @@ func updateDeps(bld *build.File, reports []*arpb.DependencyReport) (bool, error)
 				d = AbsoluteBazelTarget(bld, d)
 				if d == fullTarget {
 					return false, &AnalysisFailedError{
-						fmt.Sprintf("target %s depends on itself. "+
-							"Maybe you have an incorrect `// from %s` comment, or need to split application "+
-							"entry point (main.ts) and ng_module() rule?", d, d), bld.Path}
+						[]AnalysisFailureCause{
+							AnalysisFailureCause{
+								Message: fmt.Sprintf("target %s depends on itself. "+
+									"Maybe you have an incorrect `// from %s` comment, or need to split application "+
+									"entry point (main.ts) and ng_module() rule?", d, d),
+								Path: bld.Path,
+							},
+						},
+					}
 				}
 				platform.Infof("Adding dependency on %s to %s\n", d, fullTarget)
 				if addDep(bld, r, d) {
@@ -355,6 +402,9 @@ func updateDeps(bld *build.File, reports []*arpb.DependencyReport) (bool, error)
 			errMsg := fmt.Sprintf("ERROR in %s: unresolved imports %s.\nMaybe you are missing a "+
 				"'// from ...'' comment, or the target BUILD files are incorrect?\n%s\n",
 				fullTarget, report.UnresolvedImport, strings.Join(report.GetFeedback(), "\n"))
+			if errorOnUnresolvedImports {
+				return false, fmt.Errorf(errMsg)
+			}
 			fmt.Fprintf(os.Stderr, errMsg)
 			fmt.Fprintf(os.Stderr, "Continuing.\n")
 		}
@@ -390,30 +440,29 @@ func (upd *Updater) writeBUILD(ctx context.Context, path string, bld *build.File
 	return nil
 }
 
-// UpdateBUILD drives the main process of creating/updating the BUILD file
-// underneath path based on the available sources. Returns true if it modified
-// the BUILD file, false if the BUILD file was up to date already.
-// bazelAnalyze is used to run the underlying `bazel analyze` process.
-func (upd *Updater) UpdateBUILD(ctx context.Context, path string, isRoot bool) (bool, error) {
+func getBUILDPathAndBUILDFile(ctx context.Context, path string) (string, string, *build.File, error) {
 	path = strings.TrimSuffix(path, "/BUILD") // Support both package paths and BUILD files
 	if _, err := platform.Stat(ctx, path); os.IsNotExist(err) {
-		return false, err
+		return "", "", nil, err
 	}
 	buildFilePath := filepath.Join(path, "BUILD")
 	g3root, err := workspace.Root(buildFilePath)
 	if err != nil {
-		return false, err
+		return "", "", nil, err
 	}
 	bld, err := readBUILD(ctx, g3root, buildFilePath)
 	if err != nil {
-		return false, err
+		platform.Infof("Error reading building file!")
+		return "", "", nil, err
 	}
-	changedFirstPass := false
+
+	return g3root, buildFilePath, bld, nil
+}
+
+// isTazeDisabled checks the BUILD file, or if the directory doesn't exist, the nearest
+// ancestor BUILD file for a disable_ts_auto_deps() rule.
+func isTazeDisabled(ctx context.Context, g3root string, buildFilePath string, bld *build.File) bool {
 	if _, err := platform.Stat(ctx, buildFilePath); err != nil && os.IsNotExist(err) {
-		// BUILD didn't actually exist, but would be newly created. This only counts
-		// as a change for -root directories where we want to create potentially
-		// empty ts_development_sources & ts_config.
-		changedFirstPass = isRoot
 		// Make sure ts_auto_deps hasn't been disabled in the next closest ancestor package.
 		ancestor, err := FindBUILDFile(ctx, make(map[string]*build.File), g3root, filepath.Dir(bld.Path))
 		if err != nil {
@@ -421,7 +470,7 @@ func (upd *Updater) UpdateBUILD(ctx context.Context, path string, isRoot bool) (
 				buildFilePath)
 		} else if !hasTazeEnabled(ancestor) {
 			fmt.Printf("ts_auto_deps disabled below %q\n", ancestor.Path)
-			return false, nil
+			return true
 		} else {
 			platform.Infof("BUILD file missing and ts_auto_deps is enabled below %q. Creating new BUILD file.",
 				ancestor.Path)
@@ -430,9 +479,13 @@ func (upd *Updater) UpdateBUILD(ctx context.Context, path string, isRoot bool) (
 
 	if !hasTazeEnabled(bld) {
 		fmt.Printf("ts_auto_deps disabled on %q\n", buildFilePath)
-		return false, nil
+		return true
 	}
 
+	return false
+}
+
+func (upd *Updater) addSourcesToBUILD(ctx context.Context, path string, buildFilePath string, bld *build.File) (bool, error) {
 	platform.Infof("Globbing TS sources in %s", path)
 	srcs, err := globSources(ctx, path, []string{"ts", "tsx"})
 	if err != nil {
@@ -440,34 +493,26 @@ func (upd *Updater) UpdateBUILD(ctx context.Context, path string, isRoot bool) (
 	}
 
 	platform.Infof("Updating sources")
-	changedFirstPass = updateSources(bld, srcs) || changedFirstPass
+	updatedBuild := updateSources(bld, srcs)
 
-	if changedFirstPass {
+	if updatedBuild {
 		if err := upd.writeBUILD(ctx, buildFilePath, bld); err != nil {
+			platform.Infof("Error Writing BUILD!")
 			return true, err
 		}
 	}
 
-	rules := allTSRules(bld)
-	rulesWithSrcs := []*build.Rule{}
-	for _, r := range rules {
-		srcs := r.Attr("srcs")
-		if srcs != nil {
-			if l, ok := srcs.(*build.ListExpr); ok && len(l.List) > 0 {
-				rulesWithSrcs = append(rulesWithSrcs, r)
-			}
-		}
-	}
-	platform.Infof("analyzing...")
-	reports, err := upd.runBazelAnalyze(buildFilePath, bld, rulesWithSrcs)
-	if err != nil {
-		return changedFirstPass, err
-	}
+	return updatedBuild, nil
+}
 
+// updateBUILDAfterBazelAnalyze applies the BUILD file updates that depend on bazel
+// analyze's DependencyReports, most notably updating any rules' deps.
+func (upd *Updater) updateBUILDAfterBazelAnalyze(ctx context.Context, isRoot bool, errorOnUnresolvedImports bool,
+	g3root string, buildFilePath string, bld *build.File, reports []*arpb.DependencyReport) (bool, error) {
 	platform.Infof("Updating deps")
-	changedSecondPass, err := updateDeps(bld, reports)
+	updatedBuild, err := updateDeps(bld, errorOnUnresolvedImports, reports)
 	if err != nil {
-		return changedFirstPass, err
+		return false, err
 	}
 
 	platform.Infof("Setting library rule kinds")
@@ -475,9 +520,9 @@ func (upd *Updater) UpdateBUILD(ctx context.Context, path string, isRoot bool) (
 	if err != nil {
 		return false, err
 	}
-	changedSecondPass = changedSecondPass || updatedRuleKinds
+	updatedBuild = updatedBuild || updatedRuleKinds
 
-	if changedSecondPass {
+	if updatedBuild {
 		if err := upd.writeBUILD(ctx, buildFilePath, bld); err != nil {
 			return true, err
 		}
@@ -498,7 +543,83 @@ func (upd *Updater) UpdateBUILD(ctx context.Context, path string, isRoot bool) (
 		}
 	}
 
-	return changedFirstPass || changedSecondPass, nil
+	return updatedBuild, nil
+}
+
+// CantProgressAfterWriteError reports that ts_auto_deps was run in an environment
+// where it can't make writes to the file system (such as when ts_auto_deps is running
+// as a service for cider) and the writes it made need to be visible to bazel analyze,
+// so it can continue updating the BUILD file(s).  In such a case, the caller should
+// collect the writes using a custom UpdateFile function, and re-call ts_auto_deps after
+// applying the writes.
+type CantProgressAfterWriteError struct{}
+
+func (a *CantProgressAfterWriteError) Error() string {
+	return "running ts_auto_deps in a non-writable environment, can't continue until writes are applied"
+}
+
+// UpdateBUILDOptions bundles options for the UpdateBUILD function.
+type UpdateBUILDOptions struct {
+	// InNonWritableEnvironment boolean indicates to ts_auto_deps that the writes it makes
+	// won't be immediately visible to bazel analyze, so it cannot proceed normally.
+	// In this case, if it makes a write that needs to be visible to bazel analyze, it
+	// will return a CantProgressAfterWriteError, which indicates that the caller
+	// should apply the writes made to its UpdateFile function, and re-call UpdateBUILD
+	// after the writes have been applied.
+	InNonWritableEnvironment bool
+	// IsRoot indicates that the directory is a project's root directory, so a tsconfig
+	// rule should be created.
+	IsRoot bool
+	// ErrorOnUnresolvedImports indicates to ts_auto_deps that it should fail when it's unable
+	// to resolve the package for an import instead of printing a warning and continuing
+	// assuming the the user manually added an import to their BUILD for it.
+	ErrorOnUnresolvedImports bool
+}
+
+// UpdateBUILD drives the main process of creating/updating the BUILD file
+// underneath path based on the available sources. Returns true if it modified
+// the BUILD file, false if the BUILD file was up to date already.
+// bazelAnalyze is used to run the underlying `bazel analyze` process.
+func (upd *Updater) UpdateBUILD(ctx context.Context, path string, options UpdateBUILDOptions) (bool, error) {
+	g3root, buildFilePath, bld, err := getBUILDPathAndBUILDFile(ctx, path)
+	if err != nil {
+		return false, err
+	}
+
+	if isTazeDisabled(ctx, g3root, buildFilePath, bld) {
+		return false, nil
+	}
+
+	changed, err := upd.addSourcesToBUILD(ctx, path, buildFilePath, bld)
+	if err != nil {
+		return false, err
+	}
+	if options.InNonWritableEnvironment && changed {
+		return true, &CantProgressAfterWriteError{}
+	}
+
+	rules := allTSRules(bld)
+	if len(rules) == 0 && !options.IsRoot {
+		// No TypeScript rules, no need to query for dependencies etc, so just exit early.
+		return changed, nil
+	}
+	rulesWithSrcs := []*build.Rule{}
+	for _, r := range rules {
+		srcs := r.Attr("srcs")
+		if srcs != nil {
+			if l, ok := srcs.(*build.ListExpr); ok && len(l.List) > 0 {
+				rulesWithSrcs = append(rulesWithSrcs, r)
+			}
+		}
+	}
+	platform.Infof("analyzing...")
+	reports, err := upd.runBazelAnalyze(buildFilePath, bld, rulesWithSrcs)
+	if err != nil {
+		return false, err
+	}
+
+	changedAfterBazelAnalyze, err := upd.updateBUILDAfterBazelAnalyze(ctx, options.IsRoot, options.ErrorOnUnresolvedImports, g3root, buildFilePath, bld, reports)
+	return changed || changedAfterBazelAnalyze, err
 }
 
 // hasTazeEnabled checks if the BUILD file should be managed using ts_auto_deps.
@@ -647,7 +768,7 @@ func AbsoluteBazelTarget(bld *build.File, ruleName string) string {
 		}
 		return ruleName
 	}
-	pkg := filepath.Dir(bld.Path)
+	pkg := platform.Normalize(filepath.Dir(bld.Path))
 	return fmt.Sprintf("//%s:%s", pkg, strings.TrimPrefix(ruleName, ":"))
 }
 
@@ -663,14 +784,13 @@ func allTSRules(bld *build.File) []*build.Rule {
 // attrName from the given set of sources.
 func removeSourcesUsed(bld *build.File, ruleKind, attrName string, srcs srcSet) {
 	for _, rule := range buildRules(bld, ruleKind) {
-		ruleSrcs := rule.AttrStrings(attrName)
-		for _, s := range ruleSrcs {
+		for s, _ := range srcs {
+			pkg := filepath.Dir(bld.Path)
+			// Handles ":foo.ts" references, and concatenated lists [foo.ts] + [bar.ts]
 			// TODO(martinprobst): What to do about sources that don't seem to exist?
-			if strings.HasPrefix(s, ":") {
-				s = s[1:] // Recognize ":foo.ts" style references to sources
+			if edit.ListFind(rule.Attr(attrName), s, pkg) != nil {
+				delete(srcs, s)
 			}
-			// Might be generated srcs.
-			delete(srcs, s)
 		}
 	}
 }
@@ -924,7 +1044,7 @@ func FilterPaths(paths []string) []string {
 	}
 	var newPaths []string
 	for k := range fileSet {
-		newPaths = append(newPaths, k)
+		newPaths = append(newPaths, platform.Normalize(k))
 	}
 	return newPaths
 }
@@ -1031,7 +1151,7 @@ func Execute(host *Updater, paths []string, isRoot bool, recursive bool) error {
 	ctx := context.Background()
 	for i, p := range paths {
 		isLastAndRoot := isRoot && i == len(paths)-1
-		changed, err := host.UpdateBUILD(ctx, p, isLastAndRoot)
+		changed, err := host.UpdateBUILD(ctx, p, UpdateBUILDOptions{InNonWritableEnvironment: false, IsRoot: isLastAndRoot})
 		if err != nil {
 			if recursive {
 				return fmt.Errorf("ts_auto_deps failed on %s/BUILD: %s", p, err)

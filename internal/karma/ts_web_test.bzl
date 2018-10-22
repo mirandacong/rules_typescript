@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"Unit testing in with Karma"
+"Unit testing with Karma"
 
 load(
     "@build_bazel_rules_nodejs//internal:node.bzl",
@@ -23,6 +23,7 @@ load("@io_bazel_rules_webtesting//web:web.bzl", "web_test_suite")
 load("@io_bazel_rules_webtesting//web/internal:constants.bzl", "DEFAULT_WRAPPED_TEST_TAGS")
 
 _CONF_TMPL = "//internal/karma:karma.conf.js"
+_DEFAULT_KARMA_BIN = "@npm//@bazel/karma/bin:karma"
 
 def _ts_web_test_impl(ctx):
     conf = ctx.actions.declare_file(
@@ -33,27 +34,28 @@ def _ts_web_test_impl(ctx):
     files = depset(ctx.files.srcs)
     for d in ctx.attr.deps:
         if hasattr(d, "node_sources"):
-            files += d.node_sources
+            files = depset(transitive = [files, d.node_sources])
         elif hasattr(d, "files"):
-            files += d.files
+            files = depset(transitive = [files, d.files])
 
-    # The files in the bootstrap attribute come before the require.js support.
-    # Note that due to frameworks = ['jasmine'], a few scripts will come before
-    # the bootstrap entries:
-    # build_bazel_rules_typescript_karma_deps/node_modules/jasmine-core/lib/jasmine-core/jasmine.js
-    # build_bazel_rules_typescript_karma_deps/node_modules/karma-jasmine/lib/boot.js
-    # build_bazel_rules_typescript_karma_deps/node_modules/karma-jasmine/lib/adapter.js
-    # This is desired so that the bootstrap entries can patch jasmine, as zone.js does.
-    bootstrap_entries = [
-        expand_path_into_runfiles(ctx, f.short_path)
-        for f in ctx.files.bootstrap
-    ]
-
+    # Write the AMD names shim bootstrap file
     amd_names_shim = ctx.actions.declare_file(
         "_%s.amd_names_shim.js" % ctx.label.name,
         sibling = ctx.outputs.executable,
     )
     write_amd_names_shim(ctx.actions, amd_names_shim, ctx.attr.bootstrap)
+
+    # The files in the bootstrap attribute come before the require.js support.
+    # Note that due to frameworks = ['jasmine'], a few scripts will come before
+    # the bootstrap entries:
+    # jasmine-core/lib/jasmine-core/jasmine.js
+    # karma-jasmine/lib/boot.js
+    # karma-jasmine/lib/adapter.js
+    # This is desired so that the bootstrap entries can patch jasmine, as zone.js does.
+    bootstrap_entries = [
+        expand_path_into_runfiles(ctx, f.short_path)
+        for f in ctx.files.bootstrap
+    ]
 
     # Explicitly list the requirejs library files here, rather than use
     # `frameworks: ['requirejs']`
@@ -62,9 +64,12 @@ def _ts_web_test_impl(ctx):
     # That allows bootstrap files to have anonymous AMD modules, or to do some
     # polyfilling before test libraries load.
     # See https://github.com/karma-runner/karma/issues/699
+    # `NODE_MODULES/` is a prefix recogized by karma.conf.js to allow
+    # for a priority require of nested `@bazel/karma/node_modules` before
+    # looking in root node_modules.
     bootstrap_entries += [
-        "build_bazel_rules_typescript_karma_deps/node_modules/requirejs/require.js",
-        "build_bazel_rules_typescript_karma_deps/node_modules/karma-requirejs/lib/adapter.js",
+        "NODE_MODULES/requirejs/require.js",
+        "NODE_MODULES/karma-requirejs/lib/adapter.js",
         "/".join([ctx.workspace_name, amd_names_shim.short_path]),
     ]
 
@@ -93,7 +98,7 @@ def _ts_web_test_impl(ctx):
         },
     )
 
-    karma_executable_path = ctx.executable._karma.short_path
+    karma_executable_path = ctx.executable.karma.short_path
     if karma_executable_path.startswith(".."):
         karma_executable_path = "external" + karma_executable_path[2:]
 
@@ -110,15 +115,15 @@ def _ts_web_test_impl(ctx):
         output = ctx.outputs.executable,
         is_executable = True,
         content = """#!/usr/bin/env bash
-if [ -e "$RUNFILE_MANIFEST_FILE" ]; then
+if [ -e "$RUNFILES_MANIFEST_FILE" ]; then
   while read line; do
     declare -a PARTS=($line)
-    if [ "${{PARTS[0]}}" == "build_bazel_rules_typescript/{TMPL_karma}" ]; then
+    if [ "${{PARTS[0]}}" == "{TMPL_workspace}/{TMPL_karma}" ]; then
       readonly KARMA=${{PARTS[1]}}
-    elif [ "${{PARTS[0]}}" == "build_bazel_rules_typescript/{TMPL_conf}" ]; then
+    elif [ "${{PARTS[0]}}" == "{TMPL_workspace}/{TMPL_conf}" ]; then
       readonly CONF=${{PARTS[1]}}
     fi
-  done < $RUNFILE_MANIFEST_FILE
+  done < $RUNFILES_MANIFEST_FILE
 else
   readonly KARMA={TMPL_karma}
   readonly CONF={TMPL_conf}
@@ -137,6 +142,7 @@ fi
 
 $KARMA ${{ARGV[@]}}
 """.format(
+            TMPL_workspace = ctx.workspace_name,
             TMPL_karma = karma_executable_path,
             TMPL_conf = conf.short_path,
         ),
@@ -180,8 +186,8 @@ ts_web_test = rule(
             doc = """Arbitrary files which to be served.""",
             allow_files = True,
         ),
-        "_karma": attr.label(
-            default = Label("//internal/karma:karma_bin"),
+        "karma": attr.label(
+            default = Label(_DEFAULT_KARMA_BIN),
             executable = True,
             cfg = "target",
             allow_files = True,
@@ -214,7 +220,11 @@ detail. We might switch to another runner like Jest in the future.
 
 # This macro exists only to modify the users rule definition a bit.
 # DO NOT add composition of additional rules here.
-def ts_web_test_macro(tags = [], data = [], **kwargs):
+def ts_web_test_macro(
+        karma = Label(_DEFAULT_KARMA_BIN),
+        tags = [],
+        data = [],
+        **kwargs):
     """ibazel wrapper for `ts_web_test`
 
     This macro re-exposes the `ts_web_test` rule with some extra tags so that
@@ -224,12 +234,14 @@ def ts_web_test_macro(tags = [], data = [], **kwargs):
     from there, you actually get this macro.
 
     Args:
+      karma: karma binary label
       tags: standard Bazel tags, this macro adds a couple for ibazel
       data: runtime dependencies
       **kwargs: passed through to `ts_web_test`
     """
 
     ts_web_test(
+        karma = karma,
         tags = tags + [
             # Users don't need to know that this tag is required to run under ibazel
             "ibazel_notify_changes",
@@ -237,14 +249,15 @@ def ts_web_test_macro(tags = [], data = [], **kwargs):
             "browser:chromium-system",
         ],
         # Our binary dependency must be in data[] for collect_data to pick it up
-        # FIXME: maybe we can just ask the attr._karma for its runfiles attr
-        data = data + ["@build_bazel_rules_typescript//internal/karma:karma_bin"],
+        # FIXME: maybe we can just ask the attr.karma for its runfiles attr
+        data = data + [karma],
         **kwargs
     )
 
 def ts_web_test_suite(
         name,
         browsers = ["@io_bazel_rules_webtesting//browsers:chromium-local"],
+        karma = Label(_DEFAULT_KARMA_BIN),
         args = None,
         browser_overrides = None,
         config = None,
@@ -264,6 +277,7 @@ def ts_web_test_suite(
     Args:
       name: The base name of the test.
       browsers: A sequence of labels specifying the browsers to use.
+      karma: karma binary label
       args: Args for web_test targets generated by this extension.
       browser_overrides: Dictionary; optional; default is an empty dictionary. A
         dictionary mapping from browser names to browser-specific web_test
@@ -298,11 +312,12 @@ def ts_web_test_suite(
     tags = tags + ["ibazel_notify_changes"]
 
     # Our binary dependency must be in data[] for collect_data to pick it up
-    # FIXME: maybe we can just ask the attr._karma for its runfiles attr
-    web_test_data = web_test_data + ["@build_bazel_rules_typescript//internal/karma:karma_bin"]
+    # FIXME: maybe we can just ask the attr.karma for its runfiles attr
+    web_test_data = web_test_data + [karma]
 
     ts_web_test(
         name = wrapped_test_name,
+        karma = karma,
         args = args,
         flaky = flaky,
         local = local,

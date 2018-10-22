@@ -2,6 +2,7 @@ package updater
 
 import (
 	"context"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -213,7 +214,7 @@ func TestUpdateDeps(t *testing.T) {
 		if err != nil {
 			t.Errorf("parse %s after failed: %s", tst.name, err)
 		}
-		changed, err := updateDeps(bld, []*arpb.DependencyReport{report})
+		changed, err := updateDeps(bld, false, []*arpb.DependencyReport{report})
 		if err != nil {
 			t.Errorf("update %s failed: %s", tst.name, err)
 		}
@@ -224,6 +225,45 @@ func TestUpdateDeps(t *testing.T) {
 		}
 		if changed != tst.changed {
 			t.Errorf("changed(%s), got %t, expected %t", tst.name, changed, tst.changed)
+		}
+	}
+}
+
+func TestUnresolvedImportError(t *testing.T) {
+	report := parseReport(t, `
+			rule: "//foo:bar"
+			unresolved_import: "unresolved/import"`)
+
+	bld, err := build.ParseBuild("foo/BUILD", []byte(`ts_library(
+					name = "bar",
+					srcs = ["hello.ts"],
+			)`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name                     string
+		errorOnUnresolvedImports bool
+		err                      error
+	}{
+		{
+			name:                     "Error",
+			errorOnUnresolvedImports: true,
+			err: fmt.Errorf("ERROR in %s: unresolved imports %s.\nMaybe you are missing a "+
+				"'// from ...'' comment, or the target BUILD files are incorrect?\n\n", "//foo:bar", []string{"unresolved/import"}),
+		},
+		{
+			name:                     "Warn",
+			errorOnUnresolvedImports: false,
+			err:                      nil,
+		},
+	}
+
+	for _, tst := range tests {
+		_, err = updateDeps(bld, tst.errorOnUnresolvedImports, []*arpb.DependencyReport{report})
+		if !reflect.DeepEqual(err, tst.err) {
+			t.Errorf("update %s returned error %s: expected %s", tst.name, err, tst.err)
 		}
 	}
 }
@@ -281,6 +321,81 @@ func TestAddDep(t *testing.T) {
 		if res != tst.expectAdd {
 			t.Errorf("addDep(%s, %s): got %v, expected %v", tst.buildFile, tst.newDep, res, tst.expectAdd)
 		}
+	}
+}
+
+func TestRemoveSourcesUsed(t *testing.T) {
+	tests := []struct {
+		name         string
+		buildFile    string
+		ruleKind     string
+		attrName     string
+		srcs         srcSet
+		expectedSrcs srcSet
+	}{
+		{
+			name:         "RemovesSources",
+			buildFile:    `ts_library(name = "lib", srcs = ["foo.ts", "bar.ts"])`,
+			ruleKind:     "ts_library",
+			attrName:     "srcs",
+			srcs:         map[string]bool{"foo.ts": true},
+			expectedSrcs: map[string]bool{},
+		},
+		{
+			name:         "WrongRuleKind",
+			buildFile:    `ts_library(name = "lib", srcs = ["foo.ts", "bar.ts"])`,
+			ruleKind:     "ng_module",
+			attrName:     "srcs",
+			srcs:         map[string]bool{"foo.ts": true},
+			expectedSrcs: map[string]bool{"foo.ts": true},
+		},
+		{
+			name:         "WrongAttrName",
+			buildFile:    `ts_library(name = "lib", srcs = ["foo.ts", "bar.ts"])`,
+			ruleKind:     "ts_library",
+			attrName:     "deps",
+			srcs:         map[string]bool{"foo.ts": true},
+			expectedSrcs: map[string]bool{"foo.ts": true},
+		},
+		{
+			name: "MultipleRules",
+			buildFile: `ts_library(name = "lib", srcs = ["foo.ts"])
+			ts_library(name = "lib2", srcs = ["bar.ts"])`,
+			ruleKind:     "ts_library",
+			attrName:     "srcs",
+			srcs:         map[string]bool{"foo.ts": true, "bar.ts": true},
+			expectedSrcs: map[string]bool{},
+		},
+		{
+			name:         "ConcatenatedLists",
+			buildFile:    `ts_library(name = "lib", srcs = ["foo.ts"] + ["bar.ts"])`,
+			ruleKind:     "ts_library",
+			attrName:     "srcs",
+			srcs:         map[string]bool{"foo.ts": true, "bar.ts": true},
+			expectedSrcs: map[string]bool{},
+		},
+		{
+			name:         "ColonReferences",
+			buildFile:    `ts_library(name = "lib", srcs = [":foo.ts", "bar.ts"])`,
+			ruleKind:     "ts_library",
+			attrName:     "srcs",
+			srcs:         map[string]bool{"foo.ts": true},
+			expectedSrcs: map[string]bool{},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bld, err := build.ParseBuild("foo/bar/BUILD",
+				[]byte(test.buildFile))
+			if err != nil {
+				t.Fatalf("parse failure: %v", err)
+			}
+
+			removeSourcesUsed(bld, test.ruleKind, test.attrName, test.srcs)
+			if !reflect.DeepEqual(test.srcs, test.expectedSrcs) {
+				t.Errorf("expected removeSourcesUsed() = %v, expected %v", test.srcs, test.expectedSrcs)
+			}
+		})
 	}
 }
 
