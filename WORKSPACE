@@ -14,98 +14,98 @@
 
 workspace(name = "npm_bazel_typescript")
 
-# Load nested npm_bazel_karma repository
-local_repository(
-    name = "npm_bazel_karma",
-    path = "internal/karma",
-)
+## Load nested npm_bazel_karma repository
+#local_repository(
+    #name = "npm_bazel_karma",
+    #path = "internal/karma",
+#)
 
-# Load our dependencies
-load("//:package.bzl", "rules_typescript_dev_dependencies")
+## Load our dependencies
+#load("//:package.bzl", "rules_typescript_dev_dependencies")
 
-rules_typescript_dev_dependencies()
+#rules_typescript_dev_dependencies()
 
-# Load rules_karma dependencies
-load("@npm_bazel_karma//:package.bzl", "rules_karma_dependencies")
+## Load rules_karma dependencies
+#load("@npm_bazel_karma//:package.bzl", "rules_karma_dependencies")
 
-rules_karma_dependencies()
+#rules_karma_dependencies()
 
-# Setup nodejs toolchain
-load("@build_bazel_rules_nodejs//:defs.bzl", "node_repositories", "yarn_install")
+## Setup nodejs toolchain
+#load("@build_bazel_rules_nodejs//:defs.bzl", "node_repositories", "yarn_install")
 
-# Use a bazel-managed npm dependency, allowing us to test resolution to these paths
-yarn_install(
-    name = "build_bazel_rules_typescript_internal_bazel_managed_deps",
-    package_json = "//examples/bazel_managed_deps:package.json",
-    yarn_lock = "//examples/bazel_managed_deps:yarn.lock",
-)
+## Use a bazel-managed npm dependency, allowing us to test resolution to these paths
+#yarn_install(
+    #name = "build_bazel_rules_typescript_internal_bazel_managed_deps",
+    #package_json = "//examples/bazel_managed_deps:package.json",
+    #yarn_lock = "//examples/bazel_managed_deps:yarn.lock",
+#)
 
-# Deps for the //internal/e2e/reference_types_directive test
-yarn_install(
-    name = "build_bazel_rules_typescript_internal_reference_types_directive_deps",
-    package_json = "//internal/e2e/reference_types_directive:package.json",
-    yarn_lock = "//internal/e2e/reference_types_directive:yarn.lock",
-)
+## Deps for the //internal/e2e/reference_types_directive test
+#yarn_install(
+    #name = "build_bazel_rules_typescript_internal_reference_types_directive_deps",
+    #package_json = "//internal/e2e/reference_types_directive:package.json",
+    #yarn_lock = "//internal/e2e/reference_types_directive:yarn.lock",
+#)
 
-# Install a hermetic version of node.
-node_repositories()
+## Install a hermetic version of node.
+#node_repositories()
 
-# Download npm dependencies
-yarn_install(
-    name = "npm",
-    package_json = "//:package.json",
-    yarn_lock = "//:yarn.lock",
-)
+## Download npm dependencies
+#yarn_install(
+    #name = "npm",
+    #package_json = "//:package.json",
+    #yarn_lock = "//:yarn.lock",
+#)
 
-# Setup rules_go toolchain
-load("@io_bazel_rules_go//go:def.bzl", "go_register_toolchains", "go_rules_dependencies")
+## Setup rules_go toolchain
+#load("@io_bazel_rules_go//go:def.bzl", "go_register_toolchains", "go_rules_dependencies")
 
-go_rules_dependencies()
+#go_rules_dependencies()
 
-go_register_toolchains()
+#go_register_toolchains()
 
-# Setup gazelle toolchain
-load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
+## Setup gazelle toolchain
+#load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
 
-gazelle_dependencies()
+#gazelle_dependencies()
 
-# Setup typescript toolchain
-load("//internal:ts_repositories.bzl", "ts_setup_dev_workspace")
+## Setup typescript toolchain
+#load("//internal:ts_repositories.bzl", "ts_setup_dev_workspace")
 
-ts_setup_dev_workspace()
+#ts_setup_dev_workspace()
 
-# Test that check_rules_typescript_version works as expected
-load("//:defs.bzl", "check_rules_typescript_version")
+## Test that check_rules_typescript_version works as expected
+#load("//:defs.bzl", "check_rules_typescript_version")
 
-check_rules_typescript_version(version_string = "0.25.1")
+#check_rules_typescript_version(version_string = "0.25.1")
 
-# Dependencies for generating documentation
-load("@io_bazel_rules_sass//sass:sass_repositories.bzl", "sass_repositories")
+## Dependencies for generating documentation
+#load("@io_bazel_rules_sass//sass:sass_repositories.bzl", "sass_repositories")
 
-sass_repositories()
+#sass_repositories()
 
-load("@io_bazel_skydoc//skylark:skylark.bzl", "skydoc_repositories")
+#load("@io_bazel_skydoc//skylark:skylark.bzl", "skydoc_repositories")
 
-skydoc_repositories()
+#skydoc_repositories()
 
-# Setup rules_webtesting toolchain
-load("@io_bazel_rules_webtesting//web:repositories.bzl", "web_test_repositories")
+## Setup rules_webtesting toolchain
+#load("@io_bazel_rules_webtesting//web:repositories.bzl", "web_test_repositories")
 
-web_test_repositories()
+#web_test_repositories()
 
-# Setup browser repositories
-load("@npm_bazel_karma//:browser_repositories.bzl", "browser_repositories")
+## Setup browser repositories
+#load("@npm_bazel_karma//:browser_repositories.bzl", "browser_repositories")
 
-browser_repositories()
+#browser_repositories()
 
-# Tell Bazel where the nested local repositories are that are
-# used for tests
-local_repository(
-    name = "disable_tsetse_for_external_test",
-    path = "internal/e2e/disable_tsetse_for_external",
-)
+## Tell Bazel where the nested local repositories are that are
+## used for tests
+#local_repository(
+    #name = "disable_tsetse_for_external_test",
+    #path = "internal/e2e/disable_tsetse_for_external",
+#)
 
-local_repository(
-    name = "devserver_test_workspace",
-    path = "devserver/devserver/test/test-workspace",
-)
+#local_repository(
+    #name = "devserver_test_workspace",
+    #path = "devserver/devserver/test/test-workspace",
+#)
